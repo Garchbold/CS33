@@ -1,0 +1,165 @@
+George Archbold
+OpenMP Lab
+604407413
+
+I began this lab by logging on to the Seas server and uploading the openmplab.tgz:
+ssh archbold@lnxsrv09.seas.ucla.edu
+
+I then unzipped it to openmplab:
+tar zxvf openmplab.tgz
+
+From this point on I used the guidance of Uen Tao's slides and piazza questions to lead me through the lab.
+
+I began by making the seq and omp executables:
+make seq
+make omp
+
+Then I ran them to see the overall speed of the program:
+./omp
+FUNC TIME : 0.746164
+TOTAL TIME : 2.942480
+
+I knew I would be using the omp executable because I was going to be using the OpenMP API to make modifications to func.c. I ran this a couple times and got that the average FUNC TIME was 0.72 - 0.75s, meaning i needed to get the FUNC TIME down to below .2s.
+
+
+In order to use gprof and test the individual function speeds I first had to call gprof and make a gmon.out:
+make seq GPROF=1
+./seq
+
+This gave me this information:
+
+ %   cumulative   self              self     total           
+ time   seconds   seconds    calls  ms/call  ms/call  name    
+ 72.83      0.56     0.56       15    37.38    38.78  func1
+ 14.30      0.67     0.11  5177344     0.00     0.00  rand2
+  5.20      0.71     0.04   491520     0.00     0.00  findIndexBin
+  2.60      0.73     0.02        2    10.01    10.01  init
+  1.30      0.74     0.01       15     0.67     0.67  func2
+  1.30      0.75     0.01        1    10.01    99.25  addSeed
+  1.30      0.76     0.01        1    10.01    10.01  imdilateDisk
+  1.30      0.77     0.01                             sequence
+  0.00      0.77     0.00   983042     0.00     0.00  round
+  0.00      0.77     0.00       16     0.00     0.00  dilateMatrix
+  0.00      0.77     0.00       15     0.00     0.00  func3
+  0.00      0.77     0.00       15     0.00     0.00  func4
+
+  There were more functions, however all the ones that proceeded these constituted 0% of the total run time.
+  From the table above I was very easily able to detect that the bottleneck was in func1.
+
+  I began reading about OpenMP and what the respectives included in Uen Tao's slides do.
+  So here I went into func.c and began looking where I could parallelize the code using pragma.
+
+  func.c was comprised of two for loops, a regular one and another with two nested inner for loops. My initial thought was that I could use a pragma directive to speed up the nested loop:
+
+  So I put "#pragma omp parallel" in front of the double for loop.
+  This gave me a seg fault, and after a little more reading I realized the correct call was "#pragma omp parallel for" in the case of a for loop. So after fixing it I recompiled it and ran it to test the new speed:
+
+  make omp
+  ./omp
+  FUNC TIME : 0.844866
+  TOTAL TIME : 3.055525
+
+  This actually slowed the program down. After reading through a little more I realized that this pragma respective was not applicable, and it actually needed to be "#pragma omp parallel collapse(2)" in order to parallelize the doubly nested loop.
+
+  So after trying to compile this version I once again got an error:
+
+  func.c: In function ‘func1’:
+  func.c:35:6: error: collapsed loops not perfectly nested before ‘probability’
+      	probability[i] = 0;
+      	^
+  make: *** [omp] Error 1
+
+  In order to make this work, I had to make sure that the loop was solely a nested loop with no extra things, i.e. I had to hoist out the lines that weren't in the two main for loops:
+
+  void func1(int *seed, int *array, double *arrayX, double *arrayY,
+                        double *probability, double *objxy, int *index,
+                        int Ones, int iter, int X, int Y, int Z, int n)
+{
+        int i, j;
+        int index_X, index_Y;
+        int max_size = X*Y*Z;
+
+        for(i = 0; i < n; i++){
+                arrayX[i] += 1 + 5*rand2(seed, i);
+                arrayY[i] += -2 + 2*rand2(seed, i);
+        }
+		#pragma omp parallel for collapse(2)
+        for(i = 0; i<n; i++){
+                for(j = 0; j < Ones; j++){
+                        index_X = round(arrayX[i]) + objxy[j*2 + 1];
+                        index_Y = round(arrayY[i]) + objxy[j*2];
+                        index[i*Ones + j] = fabs(index_X*Y*Z + index_Y*Z + iter);
+                        if(index[i*Ones + j] >= max_size)
+                                index[i*Ones + j] = 0;
+                }
+                ***
+                probability[i] = 0;
+
+                for(j = 0; j < Ones; j++) {
+                        probability[i] += (pow((array[index[i*Ones + j]] - 100),2) -
+                                                  pow((array[index[i*Ones + j]]-228),2))/5.0;
+                }
+                probability[i] = probability[i]/((double) Ones);
+                ****
+        }
+}
+
+I put stars around the lines of code that I had to move. 
+
+-I moved the probability[i]=0; line up to the first for loop because it operated under the same loop conditions and did not matter where it occurred as long as it reset all the values to 0 before the probablilty values were input.
+
+-The for loop that dealt with "probability[i] += (pow((array[index[i*Ones + j]]", I moved into the nested loop above because it operated under the same conitions(i.e. j incrementation) and probablitly had already been initialized since I moved it into the first loop.
+
+-And for the last line "probability[i] = probability[i]/((double) Ones);" I simply moved it out of the double loop all together and just put it into its own for loop: 
+for(i=0; i<n; i++){
+	...
+}
+
+
+After making these hoists I had successfully isolated the double loop, and there was a total of 4 for loops(one of which was nest within another). So I used the commands in front of each respective for loop:
+
+#pragma omp parallel for
+#pragma omp parallel for collapse(2)
+#pragma omp parallel for
+
+I ran this:
+make omp
+./omp
+FUNC TIME : 1.431319
+TOTAL TIME : 3.589762
+
+This was the slowest time I had gotten yet.
+Since index_X and index_Y were declared outside the parallelized text they were shared by all the threads. So in order to fix this massive slow down, I had to make these two variables private and change my pragma respectives to:
+
+#pragma omp parallel for
+#pragma omp parallel for collapse(2) private(index_X) private(index_Y)
+#pragma omp parallel for
+
+If I run it under these new conditions I get:
+
+make omp
+./omp
+FUNC TIME : 0.111887
+TOTAL TIME : 2.152801
+
+so if we take our old time and divide it by our new time we get a speed up of:
+
+0.746164/0.111887 = 6.7x faster FUNC TIME.
+
+Mission accomplished! Great success!
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
